@@ -37,10 +37,10 @@ void ProcessManager::Run(std::stop_token stop) {
             next = {}; next.state = "Waiting for configured executable";
             const auto match = FindProcess(target, &next.error);
             if (match) {
+                next.process = *match;
                 process.Reset(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, match->pid));
                 if (!process.Valid()) { next.state = "Process found; access unavailable"; next.error = WinError("OpenProcess failed"); }
                 else {
-                    next.process = *match;
                     next.image = QueryImagePath(process.Get(), &next.error);
                     next.architecture = QueryArchitecture(process.Get(), &next.error);
                     next.modules = EnumerateModules(match->pid, &next.error);

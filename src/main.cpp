@@ -91,7 +91,11 @@ int wmain(int argc, wchar_t* argv[]) {
         {
             TrainerManager trainer(directory);
             if (smoke) trainer.processes.Configure(L"SlutopiaTrainer-no-game-9d18d19d.exe",true);
-            else if (const auto console = GetConsoleWindow()) ShowWindow(console,SW_HIDE);
+            else {
+                DWORD consoleProcesses[2]{};
+                if (GetConsoleProcessList(consoleProcesses,2) == 1)
+                    if (const auto console = GetConsoleWindow()) ShowWindow(console,SW_HIDE);
+            }
             result = RunUserInterface(trainer,smoke);
         }
         if (smoke) std::filesystem::remove_all(directory);

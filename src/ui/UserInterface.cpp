@@ -162,6 +162,7 @@ int RunUserInterface(TrainerManager& app, bool smoke) {
                 throw std::runtime_error("Swap chain resize failed");
         }
         ImGui_ImplDX11_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
+        if (smoke) tab = (frames / 15) % 4;
         auto status = app.processes.Status();
         if (app.settings.hotkeys && !ImGui::GetIO().WantTextInput) {
             if (ImGui::IsKeyPressed(ImGuiKey_F5,false)) app.processes.Refresh();
@@ -207,7 +208,7 @@ int RunUserInterface(TrainerManager& app, bool smoke) {
         const HRESULT present = graphics.swap->Present(1,0);
         if (FAILED(present)) throw std::runtime_error("DirectX presentation failed (device removed or reset)");
         if (present == DXGI_STATUS_OCCLUDED) MsgWaitForMultipleObjects(0,nullptr,FALSE,50,QS_ALLINPUT);
-        if (smoke && ++frames >= 45) running = false;
+        if (smoke && ++frames >= 60) running = false;
     }
     app.logger.Write("UI closed cleanly");
     return 0;

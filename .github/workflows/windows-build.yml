@@ -16,6 +16,15 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Configuration, process lifecycle and GUI smoke tests
         run: ctest --test-dir build -C Release --output-on-failure --timeout 30
+      - name: Verify metadata collector against built executable
+        shell: pwsh
+        run: |
+          ./tools/Collect-Diagnostics.ps1 -GameDirectory ./build/Release -OutputPath ./build/diagnostics.json
+          $report = Get-Content ./build/diagnostics.json -Raw | ConvertFrom-Json
+          $exe = @($report.BinaryEvidence | Where-Object RelativePath -eq "SlutopiaTrainer.exe")
+          if ($exe.Count -ne 1 -or $exe[0].Machine -ne "x64" -or $exe[0].SHA256.Length -ne 64) {
+            throw "Collector did not identify the built x64 executable"
+          }
       - name: CLI enumeration
         run: .\build\Release\SlutopiaTrainer.exe --list
       - uses: actions/upload-artifact@v4

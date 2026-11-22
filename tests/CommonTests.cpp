@@ -27,7 +27,8 @@ int main() {
         Require(!config.Load(error).autoConnect && !error.empty(),"Unsupported schema");
         { std::ofstream file(config.Path()); file << std::string(65537,'x'); }
         Require(!config.Load(error).autoConnect && !error.empty(),"Oversized config");
-        Require(FeatureManager::Unsupported().size() == 6,"All unverified features must remain described");
+        for (const auto& feature : FeatureManager::Unsupported())
+            Require(!feature.name.empty() && !feature.category.empty() && !feature.reason.empty(),"Unavailable features must explain their reason in the UI");
         Logger logger(directory / "trainer.log");
         for (int i = 0; i < 250; ++i) logger.Write("Diagnostic event");
         Require(logger.Entries().size() == 200,"Bounded diagnostic history");

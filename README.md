@@ -45,7 +45,7 @@ Manager, then Connect. A process-name match is **not** a verified game identity.
 Access denied, architecture restrictions, missing modules and process exits are reported;
 there is no automatic elevation. Logs and process paths can contain private information.
 
-The executable retains a console entry point for diagnostics and hides its console
+The executable retains a console entry point for diagnostics and hides its own console
 when opening the GUI. DX11 falls back to WARP if hardware initialization fails.
 Closing the window stops and joins the worker without waiting for the game to close.
 
@@ -69,7 +69,7 @@ Closing the window stops and joins the worker without waiting for the game to cl
 configures and builds MSVC x64, runs CTest, enumerates processes and uploads the executable
 and test logs. Tests cover config validation/overwrite, disabled feature descriptors,
 bounded logs, real process discovery/modules/architecture, safe memory-read rejection,
-child process connection/exit/cache clearing and a 45-frame GUI run with a nonexistent
+child process connection/exit/cache clearing and a 60-frame GUI run across all four tabs with a nonexistent
 game target. Each Windows test has a 30-second timeout.
 
 Linux verification (portable components only):
