@@ -1,17 +1,29 @@
 name: Windows build
-
 on:
   push:
   pull_request:
-
+permissions:
+  contents: read
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -S . -B build -A x64
+      - name: Configure MSVC x64
+        run: cmake -S . -B build -A x64 -DBUILD_TESTING=ON
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Smoke test
-        run: .\\build\\Release\\SlutopiaTrainer.exe
+      - name: Configuration, process lifecycle and GUI smoke tests
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 30
+      - name: CLI enumeration
+        run: .\build\Release\SlutopiaTrainer.exe --list
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-test-logs
+          path: build/Testing/Temporary/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SlutopiaTrainer-windows-x64
+          path: build/Release/SlutopiaTrainer.exe
