@@ -1,0 +1,17 @@
+# Build outputs
+/build/
+/out/
+/.vs/
+CMakeFiles/
+CMakeCache.txt
+*.obj
+*.pdb
+*.exe
+*.ilk
+*.sln
+*.vcxproj*
+# Local game binaries, save files, and secrets
+/game/
+/local/
+.env
+*.sav
