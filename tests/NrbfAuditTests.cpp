@@ -28,6 +28,8 @@ int main() {
         auto b=Header(); PushU8(b,11); reject(b); // missing root
         b=Header(); String(b,2,"s"); PushU8(b,11); reject(b);
         b=Header(); String(b,1,"a"); String(b,1,"b"); PushU8(b,11); reject(b);
+        b=Header(); String(b,1,"a"); PushU8(b,16); PushI32(b,1); PushI32(b,0); PushU8(b,11); reject(b);
+        b=Header(); String(b,1,""); reject(b); // Empty string at physical EOF, no MessageEnd.
         b=Header(); String(b,0,"a"); PushU8(b,11); reject(b);
         b=Header(); String(b,1,""); PushU8(b,11); Check(nrbf::Parse(b).ok,"Empty UTF-8 string");
         b=Header(); String(b,1,std::string("\xc0\x80",2)); PushU8(b,11); reject(b);
@@ -85,6 +87,9 @@ int main() {
         put(source,valid);
         Check(SaveManager::PatchCopyFileVerified(source,dest,"currency_Soft[0];",72,500,error),"Predictable temp alias no longer clobbers source");
         Check(read(source)==valid,"Source preserved when its name is destination.tmp");
+        auto expected=valid; const std::int32_t patchedCount=500;
+        std::memcpy(expected.data()+currencyOffset,&patchedCount,sizeof(patchedCount));
+        Check(read(dest)==expected,"Exactly four target bytes differ; all unrelated data preserved");
         const auto before=read(dest);
         Check(!SaveManager::PatchCopyFileVerified(source,dest,"currency_Soft[0];",72,600,error) && read(dest)==before,"Existing outputs never overwritten");
         const auto hard=dir/"hard"; std::filesystem::create_hard_link(source,hard);
