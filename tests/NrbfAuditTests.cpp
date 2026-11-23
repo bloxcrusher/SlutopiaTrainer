@@ -61,6 +61,10 @@ int main() {
         const auto currencyOffset=parsedFixture.document.objects.at(10).FindField("Count")->byteOffset;
         wrongCurrency[currencyOffset-5]=11; // Single metadata has the same wire width as Int32.
         Check(nrbf::Parse(wrongCurrency).ok && SaveManager::ParseParameters(wrongCurrency).empty(),"Schema rejects a four-byte non-Int32 Count");
+        auto wrongLibrary=valid;
+        wrongLibrary[currencyOffset-4]=3;
+        wrongLibrary.pop_back(); PushU8(wrongLibrary,12); PushI32(wrongLibrary,3); PushStr(wrongLibrary,"OtherAssembly"); PushU8(wrongLibrary,11);
+        Check(nrbf::Parse(wrongLibrary).ok && SaveManager::ParseParameters(wrongLibrary).empty(),"Memento type names in another assembly are not trusted");
         auto duplicateKeys=valid;
         const std::string from="currency_Hard[0];", to="currency_Soft[0];";
         auto location=std::search(duplicateKeys.begin(),duplicateKeys.end(),from.begin(),from.end());

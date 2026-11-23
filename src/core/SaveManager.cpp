@@ -76,7 +76,7 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
     }
 
     const auto* upd = root.FindField("UpdatedAt");
-    if (!upd || upd->primitiveType != nrbf::PrimitiveType::Int64 || !std::holds_alternative<std::int64_t>(upd->value)) {
+    if (!upd || upd->declaredType != 0 || upd->primitiveType != nrbf::PrimitiveType::Int64 || !std::holds_alternative<std::int64_t>(upd->value)) {
         out.error = "UpdatedAt must be Int64"; return out;
     }
     out.updatedAt = std::get<std::int64_t>(upd->value);
@@ -94,7 +94,7 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
     const auto* sizeField = listObj->FindField("_size");
     const auto* itemsField = listObj->FindField("_items");
     const auto* itemsArr = itemsField ? doc.ResolveArray(*itemsField) : nullptr;
-    if (!sizeField || sizeField->primitiveType != nrbf::PrimitiveType::Int32 || !itemsArr || itemsArr->lengths.size() != 1 || itemsArr->primitiveType) {
+    if (!sizeField || sizeField->declaredType != 0 || sizeField->primitiveType != nrbf::PrimitiveType::Int32 || !itemsArr || itemsArr->lengths.size() != 1 || itemsArr->primitiveType) {
         out.error = "Saves.SavedData.Data is missing _size or _items";
         return out;
     }
@@ -117,6 +117,7 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
         const auto& obj = objIt->second;
 
         if (obj.className == "StripClub.Model.Data.SimpleCurrency+CurrencyMemento") {
+            if (obj.libraryId != root.libraryId) { out.error = "Currency library mismatch"; return out; }
             const auto* cntField = obj.FindField("Count");
             const auto* keyField = obj.FindField("Memento+<UniqueKey>k__BackingField");
             const auto* verField = obj.FindField("Memento+<Version>k__BackingField");
@@ -151,6 +152,7 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
             if (!parameterIds.insert(p.id).second) { out.error = "Duplicate memento parameter identity"; return out; }
             out.parameters.push_back(std::move(p));
         } else if (obj.className == "_Scripts.PlayerLeveling.PlayerLevelerMemento") {
+            if (obj.libraryId != root.libraryId) { out.error = "Level library mismatch"; return out; }
             const auto* lvlField = obj.FindField("rewardedLevel");
             const auto* keyField = obj.FindField("Memento+<UniqueKey>k__BackingField");
             const auto* verField = obj.FindField("Memento+<Version>k__BackingField");
