@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
-#include <unordered_map>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -121,169 +120,31 @@ void DisabledFeatures(const char* category) {
 }
 
 void ResourcesView(TrainerManager& app) {
-    if (app.saves.IsValid()) {
-        const auto& info = app.saves.Info();
-        ImGui::BeginChild("save_meta", {0, 100}, ImGuiChildFlags_Borders);
-        ImGui::Text("Active Save Player ID: %s", info.playerId.c_str());
-        ImGui::Text("File Size: %llu bytes    Last Modified (UTC): %s",
-            static_cast<unsigned long long>(info.fileSize), info.lastModifiedUtc.c_str());
-        ImGui::Text("Backup (.bak): %s", info.hasBackup ? "Present (Restorable)" : "None created yet");
-        if (ImGui::Button("Reload Save File")) {
-            app.RefreshSave();
-        }
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!info.hasBackup);
-        if (ImGui::Button("Restore Backup (.bak)")) {
-            std::string err;
-            if (app.saves.RestoreBackup(err)) {
-                app.notice = "Backup successfully restored!";
-                app.logger.Write(app.notice);
-            } else {
-                app.notice = "Restore failed: " + err;
-                app.logger.Write(app.notice);
-            }
-        }
-        ImGui::EndDisabled();
-        ImGui::EndChild();
-
-        ImGui::Spacing();
-        ImGui::TextColored({0.4f, 0.9f, 0.7f, 1}, "Confirmed Local Currencies (SavedData / Memento)");
-        ImGui::TextDisabled("Changes are applied to the local save file. Restart game or trigger save reload to see changes in-game.");
-
-        static std::unordered_map<std::string, int> editValues;
-
-        for (const auto& p : info.parameters) {
-            if (p.category != "RESOURCES") continue;
-            ImGui::PushID(p.id.c_str());
-            ImGui::BeginChild("currency_row", {0, 110}, ImGuiChildFlags_Borders);
-            ImGui::Text("%s", p.displayName.c_str());
-            ImGui::SameLine(ImGui::GetWindowWidth() - 220);
-            ImGui::TextColored({0.6f, 0.8f, 1.f, 1}, "Current: %d", p.value);
-
-            if (editValues.find(p.id) == editValues.end()) {
-                editValues[p.id] = p.value;
-            }
-
-            ImGui::SetNextItemWidth(160);
-            ImGui::InputInt("##val", &editValues[p.id]);
-            ImGui::SameLine();
-            if (ImGui::Button("Set")) {
-                std::string err;
-                if (app.saves.ModifyParameter(p.id, editValues[p.id], err)) {
-                    app.notice = "Updated " + p.displayName + " to " + std::to_string(editValues[p.id]);
-                    app.logger.Write(app.notice);
-                } else {
-                    app.notice = "Failed to update " + p.displayName + ": " + err;
-                    app.logger.Write(app.notice);
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("+100")) {
-                std::string err;
-                editValues[p.id] = p.value + 100;
-                app.saves.ModifyParameter(p.id, editValues[p.id], err);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("+1,000")) {
-                std::string err;
-                editValues[p.id] = p.value + 1000;
-                app.saves.ModifyParameter(p.id, editValues[p.id], err);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("+10,000")) {
-                std::string err;
-                editValues[p.id] = p.value + 10000;
-                app.saves.ModifyParameter(p.id, editValues[p.id], err);
-            }
-
-            ImGui::TextDisabled("Key: %s | Note: %s", p.id.c_str(), p.note.c_str());
-            ImGui::EndChild();
-            ImGui::PopID();
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::TextColored({0.95f, 0.7f, 0.4f, 1}, "Architecture Boundary Notice: Energy vs Currencies");
-        ImGui::TextWrapped("Reverse engineering of Assembly-CSharp confirms that Energy is managed server-side via ClientServerCore.Energy.EnergyServerService and is discarded by SavedData.ClearDummies(). Wallet currencies (Soft, Hard, Star, Tickets, Crystals) are stored in local Mementos and merged with server state.");
-    } else {
-        ImGui::TextWrapped("No valid Slutopia save file found in default location.");
-        ImGui::TextDisabled("Expected path: %%USERPROFILE%%\\AppData\\LocalLow\\MobiStar Games\\Slutopia\\<PlayerID>");
-        if (ImGui::Button("Search for Save File")) {
-            app.RefreshSave();
-        }
-        ImGui::Spacing();
-        DisabledFeatures("RESOURCES");
+    const auto& info = app.saves.Info();
+    if (info.candidate) {
+        ImGui::TextWrapped("Save candidate: %s", Utf8(info.path.wstring()).c_str());
+        ImGui::Text("File size: %llu bytes", static_cast<unsigned long long>(info.fileSize));
+        ImGui::TextWrapped("NRBF-like header observed. No parameter schema or player identity is verified.");
+        ImGui::TextWrapped("Backup file: %s (restore unavailable)", info.hasBackup ? "present" : "not observed");
     }
+    if (ImGui::Button("Inspect save candidates")) app.RefreshSave();
+    ImGui::TextWrapped("%s", app.notice.c_str());
+    DisabledFeatures("RESOURCES");
 }
-
-void ProgressionView(TrainerManager& app) {
-    if (app.saves.IsValid()) {
-        const auto& info = app.saves.Info();
-        bool hasProgression = false;
-        static std::unordered_map<std::string, int> progEdits;
-
-        for (const auto& p : info.parameters) {
-            if (p.category != "PROGRESSION") continue;
-            hasProgression = true;
-            ImGui::PushID(p.id.c_str());
-            ImGui::BeginChild("prog_row", {0, 110}, ImGuiChildFlags_Borders);
-            ImGui::Text("%s", p.displayName.c_str());
-            ImGui::SameLine(ImGui::GetWindowWidth() - 220);
-            ImGui::TextColored({0.6f, 0.8f, 1.f, 1}, "Current: %d", p.value);
-
-            if (progEdits.find(p.id) == progEdits.end()) {
-                progEdits[p.id] = p.value;
-            }
-
-            ImGui::SetNextItemWidth(160);
-            ImGui::InputInt("##prog_val", &progEdits[p.id]);
-            ImGui::SameLine();
-            if (ImGui::Button("Set Level")) {
-                std::string err;
-                if (app.saves.ModifyParameter(p.id, progEdits[p.id], err)) {
-                    app.notice = "Updated " + p.displayName + " to " + std::to_string(progEdits[p.id]);
-                    app.logger.Write(app.notice);
-                } else {
-                    app.notice = "Failed to update " + p.displayName + ": " + err;
-                    app.logger.Write(app.notice);
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("+1 Level")) {
-                std::string err;
-                progEdits[p.id] = p.value + 1;
-                app.saves.ModifyParameter(p.id, progEdits[p.id], err);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("+5 Levels")) {
-                std::string err;
-                progEdits[p.id] = p.value + 5;
-                app.saves.ModifyParameter(p.id, progEdits[p.id], err);
-            }
-
-            ImGui::TextDisabled("Key: %s | Note: %s", p.id.c_str(), p.note.c_str());
-            ImGui::EndChild();
-            ImGui::PopID();
-        }
-        if (!hasProgression) {
-            ImGui::TextDisabled("No progression parameters found in active save.");
-        }
-    }
-    ImGui::Spacing();
-    DisabledFeatures("PROGRESSION");
-}
+void ProgressionView(TrainerManager&) { DisabledFeatures("PROGRESSION"); }
 
 void Diagnostics(TrainerManager& app, const ProcessStatus& status) {
     if (app.gameInfo.installed) {
         ImGui::BeginChild("install_info", {0, 85}, ImGuiChildFlags_Borders);
-        ImGui::TextColored({0.4f, 0.9f, 0.7f, 1}, "Detected Game Installation:");
-        ImGui::TextWrapped("Path: %s", app.gameInfo.executablePath.string().c_str());
+        ImGui::TextColored({0.4f, 0.9f, 0.7f, 1}, "Installation candidate (filename match):");
+        ImGui::TextWrapped("Path: %s", Utf8(app.gameInfo.executablePath.wstring()).c_str());
         ImGui::Text("Steam AppID: %s    BuildID: %s    Engine: %s",
             app.gameInfo.appId.c_str(), app.gameInfo.buildId.c_str(), app.gameInfo.engine.c_str());
         ImGui::EndChild();
         ImGui::Spacing();
     }
 
+    if (!app.gameInfo.error.empty()) ImGui::TextWrapped("Detection: %s", app.gameInfo.error.c_str());
     ImGui::Text("PID: %lu    Architecture: %s", static_cast<unsigned long>(status.process.pid), status.architecture.c_str());
     ImGui::TextWrapped("Image: %s", Utf8(status.image).c_str());
     ImGui::TextWrapped("Engine evidence: %s", status.engine.c_str());
@@ -367,7 +228,7 @@ int RunUserInterface(TrainerManager& app, bool smoke) {
             ImGui::TextColored({0.95f, 0.7f, 0.4f, 1}, "○ DISCONNECTED");
         }
 
-        ImGui::TextDisabled("C++20 External Trainer   /   Unity 6 Mono x64"); ImGui::Separator();
+        ImGui::TextDisabled("C++20 External Trainer   /   Read-only diagnostics"); ImGui::Separator();
 
         ImGui::BeginChild("navigation", {185, 0});
         for (int i = 0; i < 4; ++i) {
@@ -376,7 +237,7 @@ int RunUserInterface(TrainerManager& app, bool smoke) {
         ImGui::Spacing();
         if (app.gameInfo.installed) {
             ImGui::TextColored({0.4f, 0.9f, 0.7f, 1}, "Build: %s", app.gameInfo.buildId.c_str());
-            ImGui::TextDisabled("Engine: Unity 6000.0\nBackend: Mono\nArch: x64");
+            ImGui::TextWrapped("Engine evidence: %s", app.gameInfo.engine.c_str());
         }
         ImGui::EndChild(); ImGui::SameLine();
 

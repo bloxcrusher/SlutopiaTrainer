@@ -1,8 +1,11 @@
 # Game evidence and technical findings
 
-Analysis date: 2026-11-23. Full analysis executed on local installation.
+Analysis date reported by `4903c5c`: 2026-11-23. The following findings were
+reported from Gemini's local installation. This review has no corresponding game
+binaries, NRBF fixtures or decompiled evidence, so it cannot independently verify
+them. See [ANTIGRAVITY_REVIEW.md](ANTIGRAVITY_REVIEW.md) for defects and current limits.
 
-| Technical Parameter | Confirmed Value / Evidence |
+| Technical Parameter | Reported Value / Evidence (not independently verified) |
 | --- | --- |
 | Steam App ID | `4612690` (confirmed via `appmanifest_4612690.acf` and Steam shortcut) |
 | Steam Build ID | `26839990` |
@@ -13,7 +16,6 @@ Analysis date: 2026-11-23. Full analysis executed on local installation.
 | Install Directory | `C:\Program Files (x86)\Steam\steamapps\common\Slutopia` |
 | Local Save Path | `%USERPROFILE%\AppData\LocalLow\MobiStar Games\Slutopia\<PlayerID>` |
 | Save Serialization | .NET `BinaryFormatter` (`Saves.SavedData` root object with `List<Data.Memento>`) |
-| Active Player ID | `6b03543d59f73e521168d4b7` (save file size: 173,635 bytes) |
 
 ## Reverse engineering breakdown
 
@@ -28,8 +30,9 @@ Decompilation of `Slutopia_Data\Managed\Assembly-CSharp.dll` reveals:
   - `_Scripts.PlayerLeveling.PlayerLeveler`: saves `PlayerLevelerMemento` with `rewardedLevel`.
   - `Merge.DynamicOrders.PresetMemento`, `PatternMemento`, `SmilesControllerMemento`.
 
-### 2. Confirmed Local Parameters
-The following parameters are stored in `SavedData` Mementos and can be inspected/modified offline:
+### 2. Reported Stored Parameters
+Gemini reports the following memento keys. Their presence in local storage does not
+prove offline authority, safe editability, units, or field offsets:
 - `currency_Soft[0];`: Soft Currency (Coins / Cash)
 - `currency_Hard[0];`: Hard Currency (Diamonds / Gems)
 - `currency_GirlCrystal[0];`: Girl Crystals (character ascension)
@@ -41,7 +44,7 @@ The following parameters are stored in `SavedData` Mementos and can be inspected
 - `currency_Smiles[0];`: Smiles
 - `PlayerLeveler` / `rewardedLevel`: Player Level
 
-### 3. Server-Authoritative Boundaries
+### 3. Reported Server Boundaries
 Code analysis in `ClientServerCore\Energy` and `Saves\LocalServerSaveMerger` reveals:
 - **Energy**: Managed strictly server-side by `ClientServerCore.Energy.EnergyServerService`.
   `SavedData.ClearDummies()` explicitly purges energy mementos (`IsIgnoredEnergyMemento`),
@@ -51,9 +54,11 @@ Code analysis in `ClientServerCore\Energy` and `Saves\LocalServerSaveMerger` rev
   wallet currencies are overwritten with server authoritative values. Offline play operates
   directly on the local save file.
 
-### 4. Implementation Details
-The C++20 trainer implements:
-- Automatic detection of `Slutopia.exe` and Steam library installation.
-- Process connection and live module diagnostics.
-- `SaveManager` for direct, verified offline reading and reversible editing of local currencies and player level.
-- Automatic creation of `.bak` backups before any modification.
+### 4. Current implementation after review
+
+Installation and save metadata inspection are available. Save headers identify candidates
+only, not active player identity or trusted parameters. No version-matched NRBF schema
+reader exists. Resource/progression extraction, mutation and backup restoration are
+disabled; attempts return explicit errors and preserve all files. The previous scanner
+and destructive fallback writer were removed after review. See the review document
+for required fixtures, exact-build evidence and in-game acceptance checks.
