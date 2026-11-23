@@ -93,6 +93,9 @@ all DPI/display configurations. No installed-game test has been possible in this
 
 ## Game research and next data
 
+The detailed Gemini code review, per-issue residual risks, verified build/test results
+and requirements to restore save editing are in [docs/CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md).
+
 See [docs/ANTIGRAVITY_REVIEW.md](docs/ANTIGRAVITY_REVIEW.md) for the review of `4903c5c`,
 removed unsafe save paths, regression coverage and requirements before enabling edits.
 See [docs/GAME_RESEARCH.md](docs/GAME_RESEARCH.md) for Gemini's reported findings and their verification limits.

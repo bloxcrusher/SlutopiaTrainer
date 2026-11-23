@@ -1,5 +1,8 @@
 # Review of antigravity-analysis / 4903c5c
 
+Full technical handoff (Russian): [CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md).
+This file remains the short review summary.
+
 Reviewed 2026-11-23 against its parent `82aa6f9` (PR #1 foundation).
 The original commit's Windows CI was green. That run tests a synthetic byte pattern,
 not an NRBF object graph, real game persistence or server ownership.
