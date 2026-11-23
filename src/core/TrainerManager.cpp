@@ -2,41 +2,38 @@
 
 namespace trainer {
 
-TrainerManager::TrainerManager(std::filesystem::path directory)
+TrainerManager::TrainerManager(std::filesystem::path directory, bool inspectInstallation)
     : logger(directory / "trainer.log"),
       config(directory / "settings.json"),
       processes(logger) {
     settings = config.Load(notice);
     if (!notice.empty()) logger.Write(notice);
 
-    DetectGame();
+    if (inspectInstallation) DetectGame();
 
     // If no target was manually configured, but game was detected, default to detected executable
     if (settings.executable.empty() && gameInfo.installed) {
         settings.executable = "Slutopia.exe";
-        settings.autoConnect = true;
+        // Preserve the user's auto-connect preference.
     }
 
     processes.Configure(Wide(settings.executable), settings.autoConnect);
-    RefreshSave();
+    if (inspectInstallation) RefreshSave();
 }
 
 void TrainerManager::DetectGame() {
     gameInfo = GameDetector::DetectInstallation();
     if (gameInfo.installed) {
-        logger.Write("Slutopia detected at: " + gameInfo.executablePath.string() +
+        logger.Write("Slutopia detected at: " + Utf8(gameInfo.executablePath.wstring()) +
                       " (Build: " + gameInfo.buildId + ", PE: " + gameInfo.fileVersion + ")");
     }
 }
 
 void TrainerManager::RefreshSave() {
     std::string err;
-    if (saves.Load(err)) {
-        logger.Write("Save loaded: " + saves.Info().playerId + " (" +
-                      std::to_string(saves.Info().parameters.size()) + " verified parameters)");
-    } else if (!err.empty()) {
-        logger.Write("Save inspection notice: " + err);
-    }
+    saves.Load(err);
+    notice = err;
+    if (!err.empty()) logger.Write("Save inspection: " + err);
 }
 
 void TrainerManager::Save() {

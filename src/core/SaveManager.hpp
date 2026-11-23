@@ -23,7 +23,8 @@ struct SaveFileInfo {
     std::uint64_t fileSize = 0;
     std::string lastModifiedUtc;
     bool hasBackup = false;
-    bool valid = false;
+    bool valid = false; // Reserved for a validated schema adapter; always false currently.
+    bool candidate = false;
     std::vector<SaveParameter> parameters;
 };
 
@@ -44,15 +45,14 @@ public:
     [[nodiscard]] bool IsValid() const { return info_.valid; }
     [[nodiscard]] const std::filesystem::path& SaveDirectory() const { return saveDir_; }
 
-    // Pure parsing on an in-memory buffer (useful for unit testing without disk dependencies)
+    // Fail-closed compatibility API. Raw byte/string matches cannot validate NRBF fields.
     static std::vector<SaveParameter> ParseParameters(const std::vector<std::uint8_t>& bytes);
 
 private:
     std::filesystem::path saveDir_;
     SaveFileInfo info_;
 
-    static std::optional<std::size_t> FindSequence(const std::vector<std::uint8_t>& buffer, std::string_view needle);
-    static std::string FormatUtcTime(const std::filesystem::file_time_type& ftime);
+    std::string discoveryError_;
 };
 
 } // namespace trainer

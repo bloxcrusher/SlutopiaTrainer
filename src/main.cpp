@@ -89,7 +89,7 @@ int wmain(int argc, wchar_t* argv[]) {
         auto directory = smoke ? std::filesystem::temp_directory_path() / (L"SlutopiaTrainer-smoke-" + std::to_wstring(GetCurrentProcessId())) : DataDirectory();
         int result;
         {
-            TrainerManager trainer(directory);
+            TrainerManager trainer(directory, !smoke);
             if (smoke) trainer.processes.Configure(L"SlutopiaTrainer-no-game-9d18d19d.exe",true);
             else {
                 DWORD consoleProcesses[2]{};

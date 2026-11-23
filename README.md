@@ -24,6 +24,12 @@ remain visibly disabled; no simulated values or successful edits are shown.
   Settings changes are persisted with **Save settings**; saving applies auto-connect.
   Manual Connect starts monitoring/reconnecting until Disconnect or another settings save.
 - Existing `--list` and `--process <name.exe>` command-line modes retained.
+- Installation candidate detection from the running executable, Steam registry and
+  modern Steam library paths; observed executable version and matching manifest build ID.
+  Filename matching does not verify a game adapter.
+- Bounded read-only inspection of a reported save directory. NRBF headers identify
+  candidates only. Multiple candidates, unsupported schemas and filesystem errors are
+  explained. Save writes/restoration are disabled and leave files unchanged.
 
 ## Build and run on Windows
 
@@ -40,8 +46,9 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 .\build\Release\SlutopiaTrainer.exe --process 'ActualName.exe'
 ```
 
-No target executable is guessed. In SETTINGS enter the filename observed in Task
-Manager, then Connect. A process-name match is **not** a verified game identity.
+If an installation candidate named `Slutopia.exe` is found, it can fill an empty
+target without enabling auto-connect. You can also enter the observed filename in
+SETTINGS, then Connect. A process-name match is **not** a verified game identity.
 Access denied, architecture restrictions, missing modules and process exits are reported;
 there is no automatic elevation. Logs and process paths can contain private information.
 
@@ -55,7 +62,8 @@ Closing the window stops and joins the worker without waiting for the game to cl
 | --- | --- |
 | `ProcessInspector` | Existing discovery foundation, extended with errors, architecture and modules |
 | `ProcessManager` | Worker, RAII process session, status snapshots, reconnect and exit handling |
-| `GameDetector` | Evidence from loaded modules; does not assert a game build |
+| `GameDetector` | Installation candidates, checked manifest/file-version metadata and runtime module evidence |
+| `SaveManager` | Bounded candidate metadata inspection; unverified reads/edits/restores rejected |
 | `MemoryInspector` | Checked, bounded read-only primitive; no game reads wired up |
 | `TrainerManager` | Coordinates configuration, connection and diagnostics |
 | `FeatureManager` | Explicit unsupported feature descriptors and reasons; no execution adapter |
@@ -85,16 +93,20 @@ all DPI/display configurations. No installed-game test has been possible in this
 
 ## Game research and next data
 
-See [docs/GAME_RESEARCH.md](docs/GAME_RESEARCH.md) for sources, uncertainty, the exact
-file/metadata list and the procedure to identify the actual progress storage.
+The detailed Gemini code review, per-issue residual risks, verified build/test results
+and requirements to restore save editing are in [docs/CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md).
+
+See [docs/ANTIGRAVITY_REVIEW.md](docs/ANTIGRAVITY_REVIEW.md) for the review of `4903c5c`,
+removed unsafe save paths, regression coverage and requirements before enabling edits.
+See [docs/GAME_RESEARCH.md](docs/GAME_RESEARCH.md) for Gemini's reported findings and their verification limits.
 [tools/Collect-Diagnostics.ps1](tools/Collect-Diagnostics.ps1) collects install file
 metadata, executable PE architecture/version and hashes, with optional observed save
 metadata. It neither copies game/save contents nor uploads anything.
 
-Public evidence points to Unity/Mono and `Slutopia Demo.exe` for **the demo** (4612700).
-The full game (4612690), its architecture, actual executable, save layout and server
-boundaries require installed-build evidence. Demo information is not applied to the
-full game as a verified profile.
+Gemini reports `Slutopia.exe`, Unity/Mono and a BinaryFormatter save layout for the
+full game (4612690). The review environment contains none of those game artifacts.
+Build identity, serialization field layout and local/server ownership need reproducible
+fixtures and installed-game checks before any edit can be supported.
 
 Unsupported: local resource/counter display or edits, timer edits, offline process speed
 and progress edits. Each has a visible reason in its tab. No in-app purchase bypass,

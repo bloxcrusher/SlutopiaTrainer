@@ -9,7 +9,7 @@ namespace trainer {
 
 class TrainerManager {
 public:
-    explicit TrainerManager(std::filesystem::path directory);
+    explicit TrainerManager(std::filesystem::path directory, bool inspectInstallation = true);
     void Save();
     void Connect();
     void Disconnect();

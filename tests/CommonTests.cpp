@@ -1,9 +1,9 @@
 #include "core/ConfigManager.hpp"
 #include "core/FeatureManager.hpp"
-#include "core/GameDetector.hpp"
 #include "core/Logger.hpp"
 #include "core/SaveManager.hpp"
 #include <chrono>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -51,28 +51,46 @@ int main() {
         for (int i = 0; i < 250; ++i) logger.Write("Diagnostic event");
         Require(logger.Entries().size() == 200, "Bounded diagnostic history");
 
-        // SaveManager test
-        SaveManager saveMgr(directory / "non_existent_dir");
-        Require(!saveMgr.IsValid(), "Non-existent save dir should not be valid");
-
-        // Test synthetic buffer parsing
+        // No adapter may turn a byte/string match into a confirmed game value.
         std::vector<std::uint8_t> mockBuffer(256, 0);
-        // Put class id marker \x22\x00\x00\x00 at offset 30
         mockBuffer[30] = 0x22;
-        // Put count 777 at offset 34
-        const std::int32_t count = 777;
-        std::memcpy(&mockBuffer[34], &count, sizeof(count));
-        // Put currency_Soft[0]; at offset 50
         const std::string key = "currency_Soft[0];";
-        std::memcpy(&mockBuffer[50], key.data(), key.size());
+        std::copy(key.begin(), key.end(), mockBuffer.begin() + 50);
+        Require(SaveManager::ParseParameters(mockBuffer).empty(), "Reject heuristic currency signatures");
+        std::fill(mockBuffer.begin(), mockBuffer.end(), 0);
+        std::copy(key.begin(), key.end(), mockBuffer.begin());
+        Require(SaveManager::ParseParameters(mockBuffer).empty(), "Key at offset zero must terminate safely");
+        std::copy(key.begin(), key.end(), mockBuffer.begin() + 8);
+        Require(SaveManager::ParseParameters(mockBuffer).empty(), "Missing marker before key must terminate safely");
 
-        const auto parsed = SaveManager::ParseParameters(mockBuffer);
-        Require(!parsed.empty(), "Synthetic buffer should parse currency_Soft");
-        Require(parsed[0].value == 777, "Parsed value must match 777");
-
-        // GameDetector test
-        const auto detected = GameDetector::DetectInstallation();
-        Require(!detected.engine.empty(), "Engine name should be non-empty");
+        const auto saves = directory / std::filesystem::path(u8"сохранения");
+        std::filesystem::create_directories(saves);
+        SaveManager manager(saves);
+        Require(!manager.Load(error) && !error.empty(), "Missing save is an explicit failure");
+        const auto save = saves / "player";
+        const std::string header("\0\1\0\0\0\xff\xff\xff\xff\1\0\0\0\0\0\0\0", 17);
+        const std::string original = header + std::string(256, 'x');
+        auto put = [](const auto& path, const std::string& data) { std::ofstream file(path, std::ios::binary); file << data; };
+        auto read = [](const auto& path) { std::ifstream file(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(file), {}); };
+        put(save, original); put(saves / "player.bak", "private backup");
+        Require(!manager.Load(error) && manager.Info().candidate && !manager.IsValid(), "Header is a candidate, not a validated save");
+        Require(!manager.ModifyParameter("currency_Soft[0];", 1000, error) && !error.empty(), "Reject unverified writes");
+        Require(!manager.RestoreBackup(error) && !error.empty(), "Reject unverified restoration");
+        Require(read(save) == original && read(saves / "player.bak") == "private backup", "Save and backup bytes remain unchanged");
+        Require(!std::filesystem::exists(saves / "player.tmp"), "Rejected writes create no temporary save");
+        put(saves / "second", original);
+        Require(!manager.Load(error) && !manager.Info().candidate && !error.empty(), "Ambiguous players must not select an arbitrary save");
+        std::filesystem::remove(saves / "second");
+        put(save, "truncated");
+        Require(!manager.Load(error) && manager.Info().path.empty() && manager.Info().parameters.empty(), "Corrupt replacement clears old state");
+        put(save, header);
+        std::filesystem::resize_file(save, 16 * 1024 * 1024 + 1);
+        Require(!manager.Load(error) && !manager.Info().candidate, "Oversized saves are not read into memory");
+        std::filesystem::remove(save);
+        put(saves / "other.BAK", original); put(saves / "other.tmp", original);
+        Require(!manager.Load(error), "Backups and temporary files are not active saves");
+        SaveManager missing(directory / "absent");
+        Require(!missing.Load(error) && !error.empty(), "Nonexistent directories report errors");
 
         std::filesystem::remove_all(directory);
         std::cout << "Configuration validation, persistence, save parsing and feature gates: PASS\n";

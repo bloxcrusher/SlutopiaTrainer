@@ -15,13 +15,15 @@ struct GameInstallation {
     std::string productVersion = "Unknown";
     std::string buildId = "Unknown";
     std::string appId = "4612690";
-    std::string engine = "Unity 6000.0 (Mono / x64)";
+    std::string engine = "Unknown";
+    std::string error;
 };
 
 class GameDetector {
 public:
     static std::string EngineEvidence(const std::vector<ModuleInfo>& modules);
     static GameInstallation DetectInstallation();
+    static GameInstallation InspectExecutable(const std::filesystem::path& executable);
     static std::string QueryFileVersion(const std::filesystem::path& path);
 };
 

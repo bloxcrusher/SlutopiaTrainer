@@ -19,3 +19,5 @@ CMakeCache.txt
 slutopia-diagnostics*.json
 *.log
 *.log.old
+
+/build-*/
