@@ -127,7 +127,7 @@ void ResourcesView(TrainerManager& app) {
         ImGui::TextWrapped("Backup file: %s (restore unavailable)", info.hasBackup ? "present" : "not observed");
         if (info.valid) {
             ImGui::TextColored({0.4f, 0.9f, 0.7f, 1},
-                "NRBF schema validated: Saves.SavedData (%zu mementos, %zu records)",
+                "NRBF structural candidate: Saves.SavedData (%zu mementos, %zu records)",
                 info.mementoCount, info.nrbfRecordCount);
             if (ImGui::BeginTable("parsed_resources", 4,
                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, {0, 220})) {
@@ -145,13 +145,13 @@ void ResourcesView(TrainerManager& app) {
                     ImGui::TableNextColumn();
                     ImGui::Text("%d", p.value);
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(p.isServerAuthoritative ? "Server-merged" : "Local");
+                    ImGui::TextUnformatted(p.isServerAuthoritative ? "Reported server" : "Unknown");
                     ImGui::TableNextColumn();
                     ImGui::Text("0x%zX", p.offset);
                 }
                 ImGui::EndTable();
             }
-            ImGui::TextDisabled("Read-only view: wallet currencies are reconciled by LocalServerSaveMerger on sync.");
+            ImGui::TextDisabled("Read-only candidate view; build/schema and server ownership need independent confirmation.");
         } else {
             ImGui::TextWrapped("NRBF-like header observed. Schema validation did not succeed.");
         }
@@ -168,7 +168,7 @@ void ProgressionView(TrainerManager& app) {
             ImGui::BeginChild(p.id.c_str(), {0, 72}, ImGuiChildFlags_Borders);
             ImGui::Text("%s: %d  (%s, offset 0x%zX)",
                 p.displayName.c_str(), p.value,
-                p.isServerAuthoritative ? "Server-merged" : "Local",
+                p.isServerAuthoritative ? "Reported server" : "Unknown",
                 p.offset);
             ImGui::TextDisabled("%s", p.note.c_str());
             ImGui::EndChild();

@@ -1,5 +1,8 @@
 #include "NrbfReader.hpp"
 #include <cstring>
+#include <bit>
+#include <unordered_set>
+#include <stdexcept>
 #include <limits>
 
 namespace trainer::nrbf {
@@ -48,6 +51,8 @@ struct MemberTypeDesc {
     std::string name;
     BinaryType binaryType = BinaryType::Object;
     PrimitiveType primitiveType = PrimitiveType::Null;
+    std::string className;
+    std::int32_t libraryId = 0;
 };
 
 struct ClassMetadata {
@@ -110,6 +115,7 @@ public:
             return res;
         }
 
+        if (!ValidateGraph()) { res.error = error_; return res; }
         doc_.bytesConsumed = pos_;
         res.ok = true;
         res.document = std::move(doc_);
@@ -120,6 +126,74 @@ private:
     bool Fail(std::string msg) {
         if (error_.empty()) error_ = std::move(msg);
         return false;
+    }
+
+    bool Charge(std::size_t bytes) {
+        if (bytes > 32 * 1024 * 1024 - memory_) return Fail("NRBF expanded-data budget exceeded");
+        memory_ += bytes; return true;
+    }
+    bool Cells(std::size_t count) {
+        if (count > kMaxArrayElements - cells_) return Fail("NRBF cumulative element/member budget exceeded");
+        cells_ += count; return Charge(count * 128);
+    }
+    bool Register(std::int32_t id) {
+        if (id == 0 || !ids_.insert(id).second) return Fail("Zero or duplicate NRBF object ID");
+        return Charge(128);
+    }
+    static bool SupportedPrimitive(PrimitiveType p) {
+        const auto v = static_cast<unsigned>(p);
+        return v >= 1 && v <= 16 && v != 4 && v != 5; // Decimal deliberately unsupported.
+    }
+    bool CheckValue(const FieldValue& value, const MemberTypeDesc& type) {
+        if (std::holds_alternative<NullValue>(value.value)) return true;
+        const auto* ref = std::get_if<ObjectRef>(&value.value);
+        if (!ref) return type.binaryType == BinaryType::Object || Fail("Primitive in typed reference slot");
+        if (!ids_.contains(ref->id)) return Fail("Dangling NRBF reference");
+        switch (type.binaryType) {
+        case BinaryType::String: return doc_.strings.contains(ref->id) || Fail("String slot references non-string");
+        case BinaryType::ObjectArray:
+        case BinaryType::StringArray:
+        case BinaryType::PrimitiveArray: {
+            const auto a = doc_.arrays.find(ref->id);
+            if (a == doc_.arrays.end()) return Fail("Array slot references non-array");
+            if (type.binaryType == BinaryType::StringArray && a->second.elementType != 1) return Fail("Expected StringArray");
+            if (type.binaryType == BinaryType::ObjectArray && a->second.elementType != 2) return Fail("Expected ObjectArray");
+            if (type.binaryType == BinaryType::PrimitiveArray && a->second.primitiveType != type.primitiveType) return Fail("Primitive array type mismatch");
+            return true;
+        }
+        case BinaryType::Class:
+        case BinaryType::SystemClass:
+            // Class assignability/inheritance requires CLR metadata; not inferred from names.
+            // This subset checks object-vs-array category, not CLR assignability.
+            if (type.className.ends_with("[]")) return doc_.arrays.contains(ref->id) || Fail("Class array slot references non-array");
+            return doc_.objects.contains(ref->id) || Fail("Class slot references non-object");
+        default: return true;
+        }
+    }
+    bool ValidateGraph() {
+        if (doc_.rootId == 0 || !ids_.contains(doc_.rootId)) return Fail("Missing NRBF root");
+        if (doc_.headerId != -1 && !ids_.contains(doc_.headerId)) return Fail("Missing NRBF header object");
+        for (auto lib : libraryRefs_) if (!doc_.libraries.contains(lib)) return Fail("Missing additional-type library");
+        for (const auto& [id, meta] : metadata_) {
+            if (meta.libraryId && !doc_.libraries.contains(meta.libraryId)) return Fail("Missing class library");
+            for (const auto& m : meta.members)
+                if (m.libraryId && !doc_.libraries.contains(m.libraryId)) return Fail("Missing member library");
+        }
+        for (const auto& [id, obj] : doc_.objects) {
+            const auto& types = metadata_.at(obj.metadataId).members;
+            for (std::size_t i=0; i<obj.fields.size(); ++i)
+                if (types[i].binaryType != BinaryType::Primitive && !CheckValue(obj.fields[i], types[i])) return false;
+        }
+        for (const auto& [id, a] : doc_.arrays) {
+            MemberTypeDesc type; type.binaryType = static_cast<BinaryType>(a.elementType);
+            type.primitiveType = a.primitiveType.value_or(PrimitiveType::Null);
+            for (const auto& elem : a.elements) {
+                FieldValue f;
+                std::visit([&](const auto& v) { f.value = v; }, elem);
+                if (!CheckValue(f, type)) return false;
+            }
+        }
+        return true;
     }
 
     bool CountRecord() {
@@ -146,6 +220,7 @@ private:
     template <typename T>
     bool ReadPod(T& out) {
         if (!CanRead(sizeof(T))) return Fail("Unexpected end of NRBF stream (POD)");
+        static_assert(std::endian::native == std::endian::little, "NRBF reader currently requires little endian host");
         std::memcpy(&out, &bytes_[pos_], sizeof(T));
         pos_ += sizeof(T);
         return true;
@@ -161,38 +236,49 @@ private:
             if (!ReadU8(b)) return false;
             if (i == 4 && (b & 0xF0u) != 0) return Fail("Invalid 7-bit string length overflow");
             len |= static_cast<std::uint32_t>(b & 0x7Fu) << shift;
-            if ((b & 0x80u) == 0) break;
+            if ((b & 0x80u) == 0) {
+                if (i > 0 && b == 0) return Fail("Noncanonical 7-bit length");
+                break;
+            }
             shift += 7;
             if (i == 4) return Fail("Unterminated 7-bit string length");
         }
         if (len > kMaxStringBytes) return Fail("NRBF string exceeds maximum allowed length");
         if (!CanRead(len)) return Fail("Truncated NRBF string");
-        out.assign(reinterpret_cast<const char*>(&bytes_[pos_]), len);
+        if (!Charge(len)) return false;
+        out.assign(reinterpret_cast<const char*>(bytes_.data() + pos_), len);
+        // Validate UTF-8 before exposing strings to UI/schema matching.
+        for (std::size_t i = 0; i < out.size();) {
+            std::uint32_t cp; std::size_t n;
+            const auto lead = static_cast<unsigned char>(out[i]);
+            if (lead < 0x80) { cp=lead; n=1; }
+            else if (lead>=0xc2 && lead<=0xdf) {cp=lead&31; n=2;}
+            else if (lead>=0xe0 && lead<=0xef) {cp=lead&15; n=3;}
+            else if (lead>=0xf0 && lead<=0xf4) {cp=lead&7; n=4;}
+            else return Fail("Invalid UTF-8 string");
+            if (n > out.size()-i) return Fail("Truncated UTF-8 string");
+            for (std::size_t j=1;j<n;++j) { const auto c=static_cast<unsigned char>(out[i+j]); if ((c&0xc0)!=0x80) return Fail("Invalid UTF-8 continuation"); cp=(cp<<6)|(c&63); }
+            if ((n==2 && cp<128)||(n==3 && cp<2048)||(n==4 && cp<65536)||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff)) return Fail("Invalid UTF-8 scalar");
+            i += n;
+        }
         pos_ += len;
         return true;
     }
 
-    bool ReadUtf8Char(std::int64_t& out) {
-        std::uint8_t b0 = 0;
-        if (!ReadU8(b0)) return false;
-        std::size_t extra = 0;
-        if ((b0 & 0x80u) == 0) extra = 0;
-        else if ((b0 & 0xE0u) == 0xC0u) extra = 1;
-        else if ((b0 & 0xF0u) == 0xE0u) extra = 2;
-        else if ((b0 & 0xF8u) == 0xF0u) extra = 3;
-        else return Fail("Invalid UTF-8 Char lead byte in NRBF");
-        if (!Skip(extra)) return false;
-        out = static_cast<std::int64_t>(b0);
-        return true;
+    bool ReadUtf8Char(std::int64_t&) {
+        return Fail("NRBF Char is unsupported by this subset");
     }
 
     bool ReadPrimitive(PrimitiveType pt, FieldValue& out) {
+        if (!SupportedPrimitive(pt)) return Fail("Unsupported NRBF primitive type");
+        out.primitiveType = pt;
         out.byteOffset = pos_;
         switch (pt) {
         case PrimitiveType::Boolean: {
             std::uint8_t v = 0;
             if (!ReadU8(v)) return false;
             out.byteSize = 1;
+            if (v > 1) return Fail("Invalid Boolean");
             out.value = (v != 0);
             return true;
         }
@@ -293,6 +379,11 @@ private:
     }
 
     bool SkipPrimitiveArrayElements(PrimitiveType pt, std::size_t count) {
+        if (!SupportedPrimitive(pt) || pt == PrimitiveType::Char) return Fail("Unsupported primitive array type");
+        if (pt == PrimitiveType::Boolean) {
+            for (std::size_t i=0;i<count;++i) { std::uint8_t v; if (!ReadU8(v) || v>1) return Fail("Invalid Boolean array"); }
+            return true;
+        }
         std::size_t elemSize = 0;
         switch (pt) {
         case PrimitiveType::Boolean:
@@ -328,13 +419,15 @@ private:
         std::int32_t libId = 0;
         std::string libName;
         if (!ReadI32(libId) || !ReadLengthPrefixedString(libName)) return false;
-        doc_.libraries[libId] = std::move(libName);
+        if (libId <= 0 || doc_.libraries.contains(libId) || !Charge(128)) return Fail("Invalid or duplicate library ID");
+        doc_.libraries.emplace(libId, std::move(libName));
         return true;
     }
 
     bool ReadBinaryObjectString(std::int32_t& outObjId, std::string& outStr) {
         if (!ReadI32(outObjId) || !ReadLengthPrefixedString(outStr)) return false;
-        doc_.strings[outObjId] = outStr;
+        if (!Register(outObjId) || !Charge(outStr.size())) return false;
+        doc_.strings.emplace(outObjId, outStr);
         return true;
     }
 
@@ -348,9 +441,12 @@ private:
         if (memberCount < 0 || static_cast<std::size_t>(memberCount) > kMaxMembers) {
             return Fail("NRBF class member count out of bounds");
         }
+        if (!Register(meta.metadataId) || !Cells(static_cast<std::size_t>(memberCount))) return false;
         meta.members.resize(static_cast<std::size_t>(memberCount));
+        std::unordered_set<std::string> names;
         for (auto& m : meta.members) {
             if (!ReadLengthPrefixedString(m.name)) return false;
+            if (!names.insert(m.name).second) return Fail("Duplicate member name");
         }
         for (auto& m : meta.members) {
             std::uint8_t bt = 0;
@@ -361,14 +457,14 @@ private:
             m.binaryType = static_cast<BinaryType>(bt);
         }
         for (auto& m : meta.members) {
-            if (!ReadAdditionalTypeInfo(m.binaryType, m.primitiveType)) return false;
+            if (!ReadAdditionalTypeInfo(m.binaryType, m.primitiveType, &m)) return false;
         }
         if (hasLibrary) {
-            if (!ReadI32(meta.libraryId)) return false;
+            if (!ReadI32(meta.libraryId) || meta.libraryId <= 0) return Fail("Invalid class library ID");
         }
 
         const auto metaId = meta.metadataId;
-        metadata_[metaId] = meta;
+        metadata_.emplace(metaId, std::move(meta));
         outObjId = metaId;
         return ReadClassMemberValues(metaId, metaId, depth + 1);
     }
@@ -377,27 +473,33 @@ private:
         if (depth >= kMaxDepth) return Fail("NRBF nesting depth exceeded");
         std::int32_t objId = 0, metaId = 0;
         if (!ReadI32(objId) || !ReadI32(metaId)) return false;
+        if (!Register(objId)) return false;
         outObjId = objId;
         return ReadClassMemberValues(objId, metaId, depth + 1);
     }
 
-    bool ReadAdditionalTypeInfo(BinaryType bt, PrimitiveType& outPt) {
+    bool ReadAdditionalTypeInfo(BinaryType bt, PrimitiveType& outPt, MemberTypeDesc* desc = nullptr) {
         switch (bt) {
         case BinaryType::Primitive:
         case BinaryType::PrimitiveArray: {
             std::uint8_t pt = 0;
             if (!ReadU8(pt)) return false;
             outPt = static_cast<PrimitiveType>(pt);
-            return true;
+            return (SupportedPrimitive(outPt) && outPt != PrimitiveType::Char) || Fail("Unsupported primitive declaration");
         }
         case BinaryType::SystemClass: {
             std::string cls;
-            return ReadLengthPrefixedString(cls);
+            if (!ReadLengthPrefixedString(cls)) return false;
+            if (desc) desc->className = std::move(cls);
+            return true;
         }
         case BinaryType::Class: {
             std::string cls;
             std::int32_t libId = 0;
-            return ReadLengthPrefixedString(cls) && ReadI32(libId);
+            if (!ReadLengthPrefixedString(cls) || !ReadI32(libId) || libId <= 0) return Fail("Invalid class library reference");
+            libraryRefs_.insert(libId);
+            if (desc) { desc->className = std::move(cls); desc->libraryId = libId; }
+            return true;
         }
         case BinaryType::String:
         case BinaryType::Object:
@@ -412,8 +514,10 @@ private:
     bool ReadClassMemberValues(std::int32_t objId, std::int32_t metaId, std::size_t depth) {
         const auto it = metadata_.find(metaId);
         if (it == metadata_.end()) return Fail("NRBF ClassWithId references unknown metadataId");
-        // Copy metadata to avoid iterator invalidation if nested records register new metadata.
-        const ClassMetadata meta = it->second;
+        const ClassMetadata& meta = it->second; // unordered_map rehash preserves references to elements.
+        std::size_t copies = meta.className.size();
+        for (const auto& m : meta.members) copies += m.name.size();
+        if (!Charge(copies) || !Cells(meta.members.size())) return false;
 
         ObjectRecord obj;
         obj.objectId = objId;
@@ -430,8 +534,9 @@ private:
             } else {
                 std::size_t nullRun = 0;
                 if (!ReadMemberRecord(fv, depth, nullRun)) return false;
-                if (nullRun > 1) return Fail("ObjectNullMultiple is not valid for a single class member");
+                if (fv.nullRunEncoding) return Fail("ObjectNullMultiple is not valid for a single class member");
             }
+            fv.declaredType = static_cast<std::uint8_t>(m.binaryType);
             obj.fields.push_back(std::move(fv));
         }
 
@@ -446,6 +551,7 @@ private:
             std::uint8_t rawType = 0;
             if (!ReadU8(rawType)) return false;
             const auto recType = static_cast<RecordType>(rawType);
+            out.nullRunEncoding = recType == RecordType::ObjectNullMultiple || recType == RecordType::ObjectNullMultiple256;
             if (recType == RecordType::BinaryLibrary) {
                 if (!ReadBinaryLibrary()) return false;
                 continue;
@@ -539,6 +645,7 @@ private:
     }
 
     bool ReadArrayElements(std::size_t totalElements, std::size_t depth, ArrayRecord& arr) {
+        if (!Cells(totalElements)) return false;
         arr.elements.reserve(totalElements);
         std::size_t idx = 0;
         while (idx < totalElements) {
@@ -554,7 +661,7 @@ private:
             } else if (const auto* str = std::get_if<std::string>(&elem.value)) {
                 arr.elements.emplace_back(*str);
             } else {
-                arr.elements.emplace_back(NullValue{});
+                return Fail("Boxed primitive array elements unsupported; refusing silent value loss");
             }
             idx += nullRun;
         }
@@ -566,26 +673,23 @@ private:
         std::int32_t objId = 0, rank = 0;
         std::uint8_t arrayType = 0;
         if (!ReadI32(objId) || !ReadU8(arrayType) || !ReadI32(rank)) return false;
-        if (arrayType > 5 || rank <= 0 || rank > 32) return Fail("Invalid NRBF BinaryArray type or rank");
+        if ((arrayType != 0 && arrayType != 2) || rank <= 0 || rank > 32) return Fail("Invalid NRBF BinaryArray type or rank");
 
+        if (!Register(objId)) return false;
         ArrayRecord arr;
         arr.objectId = objId;
+        if ((arrayType == 0 || arrayType == 1 || arrayType == 3 || arrayType == 4) && rank != 1) return Fail("Single/jagged array rank must be one");
         arr.lengths.resize(static_cast<std::size_t>(rank));
         std::size_t total = 1;
         for (std::int32_t i = 0; i < rank; ++i) {
             std::int32_t len = 0;
-            if (!ReadI32(len) || len < 0) return Fail("Invalid NRBF BinaryArray length");
+            if (!ReadI32(len) || len < 0 || static_cast<std::size_t>(len) > kMaxArrayElements) return Fail("Invalid NRBF BinaryArray length");
             arr.lengths[static_cast<std::size_t>(i)] = len;
             const auto ulen = static_cast<std::size_t>(len);
             if (ulen != 0 && total > kMaxArrayElements / ulen) return Fail("NRBF BinaryArray element count overflow");
             total *= ulen;
         }
-        if (arrayType >= 3) {
-            for (std::int32_t i = 0; i < rank; ++i) {
-                std::int32_t lb = 0;
-                if (!ReadI32(lb)) return false;
-            }
-        }
+
 
         std::uint8_t rawBt = 0;
         if (!ReadU8(rawBt) || rawBt > static_cast<std::uint8_t>(BinaryType::PrimitiveArray)) {
@@ -595,6 +699,8 @@ private:
         PrimitiveType pt = PrimitiveType::Null;
         if (!ReadAdditionalTypeInfo(bt, pt)) return false;
 
+        arr.elementType = rawBt;
+        if (bt == BinaryType::Primitive) arr.primitiveType = pt;
         if (bt == BinaryType::Primitive) {
             if (!SkipPrimitiveArrayElements(pt, total)) return false;
         } else {
@@ -616,24 +722,28 @@ private:
         if (!SkipPrimitiveArrayElements(static_cast<PrimitiveType>(pt), static_cast<std::size_t>(len))) {
             return false;
         }
+        if (!Register(objId)) return false;
         ArrayRecord arr;
         arr.objectId = objId;
         arr.lengths.push_back(len);
+        arr.elementType = 0; arr.primitiveType = static_cast<PrimitiveType>(pt);
         doc_.arrays[objId] = std::move(arr);
         outObjId = objId;
         return true;
     }
 
-    bool ReadArraySingleObject(std::size_t depth, std::int32_t& outObjId) {
+    bool ReadArraySingleObject(std::size_t depth, std::int32_t& outObjId, bool stringArray = false) {
         if (depth >= kMaxDepth) return Fail("NRBF nesting depth exceeded");
         std::int32_t objId = 0, len = 0;
         if (!ReadI32(objId) || !ReadI32(len)) return false;
         if (len < 0 || static_cast<std::size_t>(len) > kMaxArrayElements) {
             return Fail("Invalid ArraySingleObject length");
         }
+        if (!Register(objId)) return false;
         ArrayRecord arr;
         arr.objectId = objId;
         arr.lengths.push_back(len);
+        arr.elementType = stringArray ? 1 : 2;
         if (!ReadArrayElements(static_cast<std::size_t>(len), depth, arr)) return false;
         doc_.arrays[objId] = std::move(arr);
         outObjId = objId;
@@ -641,7 +751,7 @@ private:
     }
 
     bool ReadArraySingleString(std::size_t depth, std::int32_t& outObjId) {
-        return ReadArraySingleObject(depth, outObjId);
+        return ReadArraySingleObject(depth, outObjId, true);
     }
 
     bool ReadTopLevelRecord(RecordType recType, std::size_t depth) {
@@ -668,14 +778,15 @@ private:
         case RecordType::ArraySingleString:
             return ReadArraySingleString(depth, id);
         case RecordType::ObjectNull:
-            return true;
+            return Fail("Top-level ObjectNull unsupported");
         default:
             return Fail("Unsupported top-level NRBF record type: " + std::to_string(static_cast<int>(recType)));
         }
     }
 
     const std::vector<std::uint8_t>& bytes_;
-    std::size_t pos_ = 0;
+    std::size_t pos_ = 0, memory_ = 0, cells_ = 0;
+    std::unordered_set<std::int32_t> ids_, libraryRefs_;
     std::string error_;
     Document doc_;
     std::unordered_map<std::int32_t, ClassMetadata> metadata_;
@@ -716,8 +827,8 @@ const ArrayRecord* Document::ResolveArray(const FieldValue& field) const {
 }
 
 ParseResult Parse(const std::vector<std::uint8_t>& bytes) {
-    Reader reader(bytes);
-    return reader.Run();
+    try { Reader reader(bytes); return reader.Run(); }
+    catch (const std::exception&) { ParseResult result; result.error = "NRBF allocation or internal validation failure"; return result; }
 }
 
 std::optional<std::vector<std::uint8_t>> PatchInt32Verified(
@@ -725,6 +836,7 @@ std::optional<std::vector<std::uint8_t>> PatchInt32Verified(
     const PatchRequest& request,
     std::string& error) {
     error.clear();
+    if (request.minAllowed > request.maxAllowed) { error = "Invalid patch range"; return std::nullopt; }
     if (request.newValue < request.minAllowed || request.newValue > request.maxAllowed) {
         error = "Requested value is outside allowed bounds";
         return std::nullopt;
@@ -746,7 +858,7 @@ std::optional<std::vector<std::uint8_t>> PatchInt32Verified(
     bool matchedField = false;
     for (const auto& [objId, obj] : before.document.objects) {
         for (const auto& field : obj.fields) {
-            if (field.byteOffset == request.byteOffset && field.byteSize == sizeof(std::int32_t)) {
+            if (field.primitiveType == PrimitiveType::Int32 && field.byteOffset == request.byteOffset && field.byteSize == sizeof(std::int32_t)) {
                 if (const auto* iv = std::get_if<std::int64_t>(&field.value)) {
                     if (*iv != static_cast<std::int64_t>(request.expectedOldValue)) {
                         error = "Field value mismatch at target offset (concurrent modification or stale snapshot)";
@@ -779,7 +891,7 @@ std::optional<std::vector<std::uint8_t>> PatchInt32Verified(
     bool verifiedNewValue = false;
     for (const auto& [objId, obj] : after.document.objects) {
         for (const auto& field : obj.fields) {
-            if (field.byteOffset == request.byteOffset && field.byteSize == sizeof(std::int32_t)) {
+            if (field.primitiveType == PrimitiveType::Int32 && field.byteOffset == request.byteOffset && field.byteSize == sizeof(std::int32_t)) {
                 if (const auto* iv = std::get_if<std::int64_t>(&field.value)) {
                     verifiedNewValue = (*iv == static_cast<std::int64_t>(request.newValue));
                 }

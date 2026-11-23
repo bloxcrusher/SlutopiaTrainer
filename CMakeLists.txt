@@ -12,6 +12,7 @@ add_library(trainer_common
     src/core/ConfigManager.cpp
     src/core/Logger.cpp
     src/core/FeatureManager.cpp
+    src/core/CopyTransaction.cpp
     src/core/NrbfReader.cpp
     src/core/SaveManager.cpp)
 target_compile_features(trainer_common PUBLIC cxx_std_20)
@@ -21,6 +22,10 @@ if(BUILD_TESTING)
     add_executable(common_tests tests/CommonTests.cpp)
     target_link_libraries(common_tests PRIVATE trainer_common)
     target_compile_options(common_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    add_executable(nrbf_audit_tests tests/NrbfAuditTests.cpp)
+    target_link_libraries(nrbf_audit_tests PRIVATE trainer_common)
+    add_test(NAME nrbf_audit COMMAND nrbf_audit_tests)
+    set_tests_properties(nrbf_audit PROPERTIES TIMEOUT 60)
     add_test(NAME common COMMAND common_tests)
     set_tests_properties(common PROPERTIES TIMEOUT 15)
 endif()

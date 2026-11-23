@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <string_view>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -37,6 +38,9 @@ struct NullValue {};
 
 struct FieldValue {
     std::string name;
+    std::optional<PrimitiveType> primitiveType;
+    std::uint8_t declaredType = 2;
+    bool nullRunEncoding = false;
     std::size_t byteOffset = 0;
     std::size_t byteSize = 0;
     std::variant<NullValue, bool, std::int64_t, std::uint64_t, double, std::string, ObjectRef> value;
@@ -55,6 +59,8 @@ struct ObjectRecord {
 struct ArrayRecord {
     std::int32_t objectId = 0;
     std::vector<std::int32_t> lengths;
+    std::uint8_t elementType = 2;
+    std::optional<PrimitiveType> primitiveType;
     // Populated for object/string arrays (element is ObjectRef, string, or NullValue).
     // Primitive arrays are validated and skipped without inflating memory.
     std::vector<std::variant<NullValue, std::string, ObjectRef>> elements;
@@ -81,7 +87,8 @@ struct ParseResult {
     Document document;
 };
 
-// Bounded, non-executing MS-NRBF parser. Never throws on malformed input.
+// Bounded non-executing MS-NRBF subset. Unsupported records/types fail closed.
+// Cyclic references are retained as IDs, never recursively dereferenced.
 [[nodiscard]] ParseResult Parse(const std::vector<std::uint8_t>& bytes);
 
 // Pure integrity-checked Int32 patcher: re-parses before and after patching,

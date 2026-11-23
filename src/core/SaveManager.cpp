@@ -1,5 +1,7 @@
 #include "SaveManager.hpp"
 #include "NrbfReader.hpp"
+#include "CopyTransaction.hpp"
+#include <unordered_set>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -73,13 +75,18 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
         return out;
     }
 
-    if (const auto* upd = root.FindField("UpdatedAt")) {
-        if (const auto* v = std::get_if<std::int64_t>(&upd->value)) out.updatedAt = *v;
+    const auto* upd = root.FindField("UpdatedAt");
+    if (!upd || upd->primitiveType != nrbf::PrimitiveType::Int64 || !std::holds_alternative<std::int64_t>(upd->value)) {
+        out.error = "UpdatedAt must be Int64"; return out;
+    }
+    out.updatedAt = std::get<std::int64_t>(upd->value);
+    if (!doc.libraries.contains(root.libraryId) || !doc.libraries.at(root.libraryId).starts_with("Assembly-CSharp,")) {
+        out.error = "Unexpected root library"; return out;
     }
 
     const auto* dataField = root.FindField("Data");
     const auto* listObj = dataField ? doc.ResolveObject(*dataField) : nullptr;
-    if (!listObj) {
+    if (!listObj || !listObj->className.starts_with("System.Collections.Generic.List`1[[Data.Memento,")) {
         out.error = "Saves.SavedData.Data list is missing or null";
         return out;
     }
@@ -87,7 +94,7 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
     const auto* sizeField = listObj->FindField("_size");
     const auto* itemsField = listObj->FindField("_items");
     const auto* itemsArr = itemsField ? doc.ResolveArray(*itemsField) : nullptr;
-    if (!sizeField || !itemsArr) {
+    if (!sizeField || sizeField->primitiveType != nrbf::PrimitiveType::Int32 || !itemsArr || itemsArr->lengths.size() != 1 || itemsArr->primitiveType) {
         out.error = "Saves.SavedData.Data is missing _size or _items";
         return out;
     }
@@ -101,22 +108,23 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
     const auto count = static_cast<std::size_t>(*rawSize);
     out.mementoCount = count;
 
+    std::unordered_set<std::string> parameterIds;
     for (std::size_t i = 0; i < count; ++i) {
         const auto* ref = std::get_if<nrbf::ObjectRef>(&itemsArr->elements[i]);
-        if (!ref) continue;
+        if (!ref) { out.error = "Null/non-object memento in active list"; return out; }
         const auto objIt = doc.objects.find(ref->id);
-        if (objIt == doc.objects.end()) continue;
+        if (objIt == doc.objects.end()) { out.error = "Unresolved memento object"; return out; }
         const auto& obj = objIt->second;
 
         if (obj.className == "StripClub.Model.Data.SimpleCurrency+CurrencyMemento") {
             const auto* cntField = obj.FindField("Count");
             const auto* keyField = obj.FindField("Memento+<UniqueKey>k__BackingField");
             const auto* verField = obj.FindField("Memento+<Version>k__BackingField");
-            if (!cntField || !keyField || cntField->byteSize != sizeof(std::int32_t)) continue;
+            if (!cntField || !keyField || cntField->primitiveType != nrbf::PrimitiveType::Int32 || cntField->declaredType != 0 || keyField->declaredType != 1) { out.error = "Invalid currency member types"; return out; }
 
             const auto* cntVal = std::get_if<std::int64_t>(&cntField->value);
             const auto keyStr = doc.ResolveString(*keyField);
-            if (!cntVal || !keyStr) continue;
+            if (!cntVal || !keyStr) { out.error = "Invalid currency value/key"; return out; }
             if (*cntVal < std::numeric_limits<std::int32_t>::min() ||
                 *cntVal > std::numeric_limits<std::int32_t>::max()) {
                 continue;
@@ -136,16 +144,17 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
                 if (*keyStr == desc.uniqueKey) {
                     p.displayName = desc.displayName;
                     p.isServerAuthoritative = desc.serverMerged;
-                    p.note = desc.note;
+                    p.note = std::string("Reported by upstream analysis: ") + desc.note;
                     break;
                 }
             }
+            if (!parameterIds.insert(p.id).second) { out.error = "Duplicate memento parameter identity"; return out; }
             out.parameters.push_back(std::move(p));
         } else if (obj.className == "_Scripts.PlayerLeveling.PlayerLevelerMemento") {
             const auto* lvlField = obj.FindField("rewardedLevel");
             const auto* keyField = obj.FindField("Memento+<UniqueKey>k__BackingField");
             const auto* verField = obj.FindField("Memento+<Version>k__BackingField");
-            if (!lvlField || !keyField || lvlField->byteSize != sizeof(std::int32_t)) continue;
+            if (!lvlField || !keyField || lvlField->primitiveType != nrbf::PrimitiveType::Int32 || lvlField->declaredType != 0 || keyField->declaredType != 1) { out.error = "Invalid level member types"; return out; }
 
             const auto* lvlVal = std::get_if<std::int64_t>(&lvlField->value);
             const auto keyStr = doc.ResolveString(*keyField);
@@ -163,7 +172,8 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
             p.offset = lvlField->byteOffset;
             p.isServerAuthoritative = true;
             p.schemaVersion = verField ? doc.ResolveString(*verField).value_or("") : "";
-            p.note = "Overwritten by LocalServerSaveMerger.MergePlayerLevel";
+            p.note = "Reported by upstream analysis: server merge of rewardedLevel; not independently game-tested";
+            if (!parameterIds.insert(p.id).second) { out.error = "Duplicate memento parameter identity"; return out; }
             out.parameters.push_back(std::move(p));
         }
     }
@@ -196,6 +206,7 @@ bool ReadFileBounded(const std::filesystem::path& path, std::vector<std::uint8_t
         error = "Failed to read complete save file";
         return false;
     }
+    if (file.peek() != std::char_traits<char>::eof()) { out.clear(); error = "File grew while reading"; return false; }
     return true;
 }
 
@@ -369,62 +380,12 @@ bool SaveManager::PatchCopyFileVerified(
     const auto patched = nrbf::PatchInt32Verified(original, req, error);
     if (!patched) return false;
 
-    auto tempPath = destCopyPath;
-    tempPath += ".tmp";
-
-    {
-        std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) {
-            error = "Failed to create temporary output file";
-            return false;
-        }
-        out.write(reinterpret_cast<const char*>(patched->data()), static_cast<std::streamsize>(patched->size()));
-        out.flush();
-        if (!out.good()) {
-            out.close();
-            std::filesystem::remove(tempPath, ec);
-            error = "Failed while writing or flushing temporary output file";
-            return false;
-        }
-        out.close();
-        if (out.fail()) {
-            std::filesystem::remove(tempPath, ec);
-            error = "Failed to close temporary output file cleanly";
-            return false;
-        }
+    // Recheck snapshot before staging; source is never opened for writing.
+    std::vector<std::uint8_t> check;
+    if (!ReadFileBounded(sourcePath, check, error) || check != original) {
+        error = "Source changed during copy preparation"; return false;
     }
-
-    // Re-read and re-parse the temporary file from disk before publishing.
-    std::vector<std::uint8_t> readBack;
-    if (!ReadFileBounded(tempPath, readBack, error) || readBack != *patched) {
-        std::filesystem::remove(tempPath, ec);
-        if (error.empty()) error = "Disk readback mismatch on temporary output file";
-        return false;
-    }
-    const auto verifyExtracted = ExtractSavedData(readBack);
-    if (!verifyExtracted.ok) {
-        std::filesystem::remove(tempPath, ec);
-        error = "Post-write disk validation failed: " + verifyExtracted.error;
-        return false;
-    }
-
-#ifdef _WIN32
-    if (!MoveFileExW(tempPath.c_str(), destCopyPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        const DWORD lastErr = GetLastError();
-        std::filesystem::remove(tempPath, ec);
-        error = "Atomic MoveFileExW failed with Win32 error " + std::to_string(lastErr);
-        return false;
-    }
-#else
-    std::filesystem::rename(tempPath, destCopyPath, ec);
-    if (ec) {
-        std::filesystem::remove(tempPath, ec);
-        error = "Atomic rename failed: " + ec.message();
-        return false;
-    }
-#endif
-
-    return true;
+    return testing::PublishNewCopy(destCopyPath, *patched, error);
 }
 
 } // namespace trainer

@@ -49,10 +49,10 @@ public:
     [[nodiscard]] bool IsValid() const { return info_.valid; }
     [[nodiscard]] const std::filesystem::path& SaveDirectory() const { return saveDir_; }
 
-    // Strict MS-NRBF parser for Saves.SavedData. Returns empty on any structural/schema failure.
+    // Structural candidate inspection, not verified game/build compatibility. Returns empty on failure.
     static std::vector<SaveParameter> ParseParameters(const std::vector<std::uint8_t>& bytes);
 
-    // Integrity-checked patcher operating exclusively on a separate test copy (never in-place on sourcePath).
+    // Integrity-checked patcher operating only to a NEW output file; existing destinations are never replaced.
     static bool PatchCopyFileVerified(
         const std::filesystem::path& sourcePath,
         const std::filesystem::path& destCopyPath,
