@@ -8,10 +8,16 @@ include(FetchContent)
 FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
     URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d)
 FetchContent_MakeAvailable(json)
-add_library(trainer_common src/core/ConfigManager.cpp src/core/Logger.cpp src/core/FeatureManager.cpp)
+add_library(trainer_common
+    src/core/ConfigManager.cpp
+    src/core/Logger.cpp
+    src/core/FeatureManager.cpp
+    src/core/SaveManager.cpp
+    src/core/ProcessInspector.cpp
+    src/core/GameDetector.cpp)
 target_compile_features(trainer_common PUBLIC cxx_std_20)
 target_include_directories(trainer_common PUBLIC src)
-target_link_libraries(trainer_common PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(trainer_common PUBLIC nlohmann_json::nlohmann_json shell32 ole32 version)
 if(BUILD_TESTING)
     add_executable(common_tests tests/CommonTests.cpp)
     target_link_libraries(common_tests PRIVATE trainer_common)
@@ -29,10 +35,13 @@ add_library(imgui_dx11 STATIC ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/
     ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp)
 target_include_directories(imgui_dx11 PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(imgui_dx11 PUBLIC d3d11 dxgi d3dcompiler dwmapi)
-add_executable(SlutopiaTrainer src/main.cpp src/core/ProcessInspector.cpp
-    src/core/ProcessManager.cpp src/core/GameDetector.cpp src/core/MemoryInspector.cpp
-    src/core/TrainerManager.cpp src/ui/UserInterface.cpp)
-target_link_libraries(SlutopiaTrainer PRIVATE trainer_common imgui_dx11 shell32 ole32)
+add_executable(SlutopiaTrainer
+    src/main.cpp
+    src/core/ProcessManager.cpp
+    src/core/MemoryInspector.cpp
+    src/core/TrainerManager.cpp
+    src/ui/UserInterface.cpp)
+target_link_libraries(SlutopiaTrainer PRIVATE trainer_common imgui_dx11 shell32 ole32 version)
 target_compile_definitions(trainer_common PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 if(MSVC)
     target_compile_options(trainer_common PRIVATE /W4 /permissive- /EHsc /utf-8)
