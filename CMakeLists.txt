@@ -12,6 +12,7 @@ add_library(trainer_common
     src/core/ConfigManager.cpp
     src/core/Logger.cpp
     src/core/FeatureManager.cpp
+    src/core/NrbfReader.cpp
     src/core/SaveManager.cpp)
 target_compile_features(trainer_common PUBLIC cxx_std_20)
 target_include_directories(trainer_common PUBLIC src)

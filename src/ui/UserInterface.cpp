@@ -124,14 +124,58 @@ void ResourcesView(TrainerManager& app) {
     if (info.candidate) {
         ImGui::TextWrapped("Save candidate: %s", Utf8(info.path.wstring()).c_str());
         ImGui::Text("File size: %llu bytes", static_cast<unsigned long long>(info.fileSize));
-        ImGui::TextWrapped("NRBF-like header observed. No parameter schema or player identity is verified.");
         ImGui::TextWrapped("Backup file: %s (restore unavailable)", info.hasBackup ? "present" : "not observed");
+        if (info.valid) {
+            ImGui::TextColored({0.4f, 0.9f, 0.7f, 1},
+                "NRBF schema validated: Saves.SavedData (%zu mementos, %zu records)",
+                info.mementoCount, info.nrbfRecordCount);
+            if (ImGui::BeginTable("parsed_resources", 4,
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, {0, 220})) {
+                ImGui::TableSetupColumn("Parameter");
+                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn("Authority", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                ImGui::TableSetupColumn("NRBF Offset", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableHeadersRow();
+                for (const auto& p : info.parameters) {
+                    if (p.category != "RESOURCES") continue;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(p.displayName.c_str());
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", p.id.c_str(), p.note.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", p.value);
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(p.isServerAuthoritative ? "Server-merged" : "Local");
+                    ImGui::TableNextColumn();
+                    ImGui::Text("0x%zX", p.offset);
+                }
+                ImGui::EndTable();
+            }
+            ImGui::TextDisabled("Read-only view: wallet currencies are reconciled by LocalServerSaveMerger on sync.");
+        } else {
+            ImGui::TextWrapped("NRBF-like header observed. Schema validation did not succeed.");
+        }
     }
     if (ImGui::Button("Inspect save candidates")) app.RefreshSave();
     ImGui::TextWrapped("%s", app.notice.c_str());
     DisabledFeatures("RESOURCES");
 }
-void ProgressionView(TrainerManager&) { DisabledFeatures("PROGRESSION"); }
+void ProgressionView(TrainerManager& app) {
+    const auto& info = app.saves.Info();
+    if (info.valid) {
+        for (const auto& p : info.parameters) {
+            if (p.category != "PROGRESSION") continue;
+            ImGui::BeginChild(p.id.c_str(), {0, 72}, ImGuiChildFlags_Borders);
+            ImGui::Text("%s: %d  (%s, offset 0x%zX)",
+                p.displayName.c_str(), p.value,
+                p.isServerAuthoritative ? "Server-merged" : "Local",
+                p.offset);
+            ImGui::TextDisabled("%s", p.note.c_str());
+            ImGui::EndChild();
+        }
+    }
+    DisabledFeatures("PROGRESSION");
+}
 
 void Diagnostics(TrainerManager& app, const ProcessStatus& status) {
     if (app.gameInfo.installed) {

@@ -13,7 +13,8 @@ struct SaveParameter {
     std::string category;
     std::int32_t value = 0;
     std::size_t offset = 0;
-    bool isServerAuthoritative = false;
+    bool isServerAuthoritative = true;
+    std::string schemaVersion;
     std::string note;
 };
 
@@ -21,9 +22,12 @@ struct SaveFileInfo {
     std::filesystem::path path;
     std::string playerId;
     std::uint64_t fileSize = 0;
+    std::int64_t updatedAt = 0;
+    std::size_t mementoCount = 0;
+    std::size_t nrbfRecordCount = 0;
     std::string lastModifiedUtc;
     bool hasBackup = false;
-    bool valid = false; // Reserved for a validated schema adapter; always false currently.
+    bool valid = false;
     bool candidate = false;
     std::vector<SaveParameter> parameters;
 };
@@ -45,13 +49,21 @@ public:
     [[nodiscard]] bool IsValid() const { return info_.valid; }
     [[nodiscard]] const std::filesystem::path& SaveDirectory() const { return saveDir_; }
 
-    // Fail-closed compatibility API. Raw byte/string matches cannot validate NRBF fields.
+    // Strict MS-NRBF parser for Saves.SavedData. Returns empty on any structural/schema failure.
     static std::vector<SaveParameter> ParseParameters(const std::vector<std::uint8_t>& bytes);
+
+    // Integrity-checked patcher operating exclusively on a separate test copy (never in-place on sourcePath).
+    static bool PatchCopyFileVerified(
+        const std::filesystem::path& sourcePath,
+        const std::filesystem::path& destCopyPath,
+        const std::string& paramId,
+        std::int32_t expectedOldValue,
+        std::int32_t newValue,
+        std::string& error);
 
 private:
     std::filesystem::path saveDir_;
     SaveFileInfo info_;
-
     std::string discoveryError_;
 };
 
