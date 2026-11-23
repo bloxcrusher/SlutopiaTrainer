@@ -5,6 +5,7 @@
 #include <cctype>
 #include <fstream>
 #include <limits>
+#include <unordered_set>
 #ifdef _WIN32
 #include <ShlObj.h>
 #include <windows.h>
@@ -51,6 +52,12 @@ struct ExtractedSave {
     std::vector<SaveParameter> parameters;
 };
 
+bool IsAssemblyCSharpLibrary(const nrbf::Document& doc, std::int32_t libraryId) {
+    const auto it = doc.libraries.find(libraryId);
+    if (it == doc.libraries.end()) return false;
+    return it->second == "Assembly-CSharp" || it->second.rfind("Assembly-CSharp,", 0) == 0;
+}
+
 ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
     ExtractedSave out;
     const auto parsed = nrbf::Parse(bytes);
@@ -68,12 +75,16 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
         return out;
     }
     const auto& root = rootIt->second;
-    if (root.className != "Saves.SavedData") {
-        out.error = "Unexpected NRBF root class: " + root.className;
+    if (root.className != "Saves.SavedData" || !IsAssemblyCSharpLibrary(doc, root.libraryId)) {
+        out.error = "Unexpected NRBF root class or assembly: " + root.className;
         return out;
     }
 
     if (const auto* upd = root.FindField("UpdatedAt")) {
+        if (upd->primitiveType != nrbf::PrimitiveType::Int64) {
+            out.error = "Saves.SavedData.UpdatedAt is not Int64";
+            return out;
+        }
         if (const auto* v = std::get_if<std::int64_t>(&upd->value)) out.updatedAt = *v;
     }
 
@@ -87,8 +98,8 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
     const auto* sizeField = listObj->FindField("_size");
     const auto* itemsField = listObj->FindField("_items");
     const auto* itemsArr = itemsField ? doc.ResolveArray(*itemsField) : nullptr;
-    if (!sizeField || !itemsArr) {
-        out.error = "Saves.SavedData.Data is missing _size or _items";
+    if (!sizeField || sizeField->primitiveType != nrbf::PrimitiveType::Int32 || !itemsArr) {
+        out.error = "Saves.SavedData.Data is missing Int32 _size or _items array";
         return out;
     }
 
@@ -101,25 +112,44 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
     const auto count = static_cast<std::size_t>(*rawSize);
     out.mementoCount = count;
 
+    std::unordered_set<std::string> seenParamIds;
     for (std::size_t i = 0; i < count; ++i) {
-        const auto* ref = std::get_if<nrbf::ObjectRef>(&itemsArr->elements[i]);
+        const auto* ref = std::get_if<nrbf::ObjectRef>(&itemsArr->elements[i].value);
         if (!ref) continue;
         const auto objIt = doc.objects.find(ref->id);
         if (objIt == doc.objects.end()) continue;
         const auto& obj = objIt->second;
 
         if (obj.className == "StripClub.Model.Data.SimpleCurrency+CurrencyMemento") {
+            if (!IsAssemblyCSharpLibrary(doc, obj.libraryId)) {
+                out.error = "Untrusted library for CurrencyMemento";
+                out.parameters.clear();
+                return out;
+            }
             const auto* cntField = obj.FindField("Count");
             const auto* keyField = obj.FindField("Memento+<UniqueKey>k__BackingField");
             const auto* verField = obj.FindField("Memento+<Version>k__BackingField");
-            if (!cntField || !keyField || cntField->byteSize != sizeof(std::int32_t)) continue;
+            if (!cntField || !keyField ||
+                cntField->primitiveType != nrbf::PrimitiveType::Int32 ||
+                cntField->byteSize != sizeof(std::int32_t)) {
+                out.error = "Invalid CurrencyMemento.Count field type or missing UniqueKey";
+                out.parameters.clear();
+                return out;
+            }
 
             const auto* cntVal = std::get_if<std::int64_t>(&cntField->value);
             const auto keyStr = doc.ResolveString(*keyField);
-            if (!cntVal || !keyStr) continue;
-            if (*cntVal < std::numeric_limits<std::int32_t>::min() ||
+            if (!cntVal || !keyStr || keyStr->empty() ||
+                *cntVal < std::numeric_limits<std::int32_t>::min() ||
                 *cntVal > std::numeric_limits<std::int32_t>::max()) {
-                continue;
+                out.error = "Invalid CurrencyMemento Count range or UniqueKey string";
+                out.parameters.clear();
+                return out;
+            }
+            if (!seenParamIds.insert(*keyStr).second) {
+                out.error = "Duplicate currency parameter key in save graph: " + *keyStr;
+                out.parameters.clear();
+                return out;
             }
 
             SaveParameter p;
@@ -142,17 +172,35 @@ ExtractedSave ExtractSavedData(const std::vector<std::uint8_t>& bytes) {
             }
             out.parameters.push_back(std::move(p));
         } else if (obj.className == "_Scripts.PlayerLeveling.PlayerLevelerMemento") {
+            if (!IsAssemblyCSharpLibrary(doc, obj.libraryId)) {
+                out.error = "Untrusted library for PlayerLevelerMemento";
+                out.parameters.clear();
+                return out;
+            }
             const auto* lvlField = obj.FindField("rewardedLevel");
             const auto* keyField = obj.FindField("Memento+<UniqueKey>k__BackingField");
             const auto* verField = obj.FindField("Memento+<Version>k__BackingField");
-            if (!lvlField || !keyField || lvlField->byteSize != sizeof(std::int32_t)) continue;
+            if (!lvlField || !keyField ||
+                lvlField->primitiveType != nrbf::PrimitiveType::Int32 ||
+                lvlField->byteSize != sizeof(std::int32_t)) {
+                out.error = "Invalid PlayerLevelerMemento.rewardedLevel field type or missing UniqueKey";
+                out.parameters.clear();
+                return out;
+            }
 
             const auto* lvlVal = std::get_if<std::int64_t>(&lvlField->value);
             const auto keyStr = doc.ResolveString(*keyField);
-            if (!lvlVal || !keyStr || *keyStr != "PlayerLeveler") continue;
-            if (*lvlVal < std::numeric_limits<std::int32_t>::min() ||
+            if (!lvlVal || !keyStr || *keyStr != "PlayerLeveler" ||
+                *lvlVal < std::numeric_limits<std::int32_t>::min() ||
                 *lvlVal > std::numeric_limits<std::int32_t>::max()) {
-                continue;
+                out.error = "Invalid PlayerLevelerMemento value or UniqueKey";
+                out.parameters.clear();
+                return out;
+            }
+            if (!seenParamIds.insert("PlayerLeveler.rewardedLevel").second) {
+                out.error = "Duplicate PlayerLeveler parameter in save graph";
+                out.parameters.clear();
+                return out;
             }
 
             SaveParameter p;

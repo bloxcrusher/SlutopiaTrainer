@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -29,17 +30,40 @@ enum class PrimitiveType : std::uint8_t {
     String = 18
 };
 
+enum class BinaryType : std::uint8_t {
+    Primitive = 0,
+    String = 1,
+    Object = 2,
+    SystemClass = 3,
+    Class = 4,
+    ObjectArray = 5,
+    StringArray = 6,
+    PrimitiveArray = 7
+};
+
+enum class BinaryArrayType : std::uint8_t {
+    Single = 0,
+    Jagged = 1,
+    Rectangular = 2,
+    SingleOffset = 3,
+    JaggedOffset = 4,
+    RectangularOffset = 5
+};
+
 struct ObjectRef {
     std::int32_t id = 0;
 };
 
 struct NullValue {};
 
+using ValueVariant = std::variant<NullValue, bool, std::int64_t, std::uint64_t, double, std::string, ObjectRef>;
+
 struct FieldValue {
     std::string name;
+    PrimitiveType primitiveType = PrimitiveType::Null;
     std::size_t byteOffset = 0;
     std::size_t byteSize = 0;
-    std::variant<NullValue, bool, std::int64_t, std::uint64_t, double, std::string, ObjectRef> value;
+    ValueVariant value;
 };
 
 struct ObjectRecord {
@@ -52,12 +76,21 @@ struct ObjectRecord {
     [[nodiscard]] const FieldValue* FindField(std::string_view name) const;
 };
 
+struct ArrayElement {
+    PrimitiveType primitiveType = PrimitiveType::Null;
+    std::size_t byteOffset = 0;
+    std::size_t byteSize = 0;
+    ValueVariant value;
+};
+
 struct ArrayRecord {
     std::int32_t objectId = 0;
+    BinaryArrayType arrayType = BinaryArrayType::Single;
+    BinaryType elementBinaryType = BinaryType::Object;
+    PrimitiveType elementPrimitiveType = PrimitiveType::Null;
     std::vector<std::int32_t> lengths;
-    // Populated for object/string arrays (element is ObjectRef, string, or NullValue).
-    // Primitive arrays are validated and skipped without inflating memory.
-    std::vector<std::variant<NullValue, std::string, ObjectRef>> elements;
+    std::vector<std::int32_t> lowerBounds;
+    std::vector<ArrayElement> elements;
 };
 
 struct Document {
@@ -81,11 +114,11 @@ struct ParseResult {
     Document document;
 };
 
-// Bounded, non-executing MS-NRBF parser. Never throws on malformed input.
-[[nodiscard]] ParseResult Parse(const std::vector<std::uint8_t>& bytes);
+// Bounded, non-executing MS-NRBF parser. Guaranteed noexcept; clears Document on failure.
+[[nodiscard]] ParseResult Parse(const std::vector<std::uint8_t>& bytes) noexcept;
 
-// Pure integrity-checked Int32 patcher: re-parses before and after patching,
-// verifying expected old value, bounds, and complete NRBF stream validity.
+// Pure integrity-checked Int32 patcher. Guaranteed noexcept; re-parses before and after patching,
+// verifying expected old value, PrimitiveType::Int32, bounds, and complete NRBF stream validity.
 struct PatchRequest {
     std::size_t byteOffset = 0;
     std::int32_t expectedOldValue = 0;
@@ -97,6 +130,6 @@ struct PatchRequest {
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> PatchInt32Verified(
     const std::vector<std::uint8_t>& originalBytes,
     const PatchRequest& request,
-    std::string& error);
+    std::string& error) noexcept;
 
 } // namespace trainer::nrbf
